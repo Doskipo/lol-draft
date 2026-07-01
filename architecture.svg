@@ -1,0 +1,127 @@
+<svg width="100%" viewBox="0 0 760 558" role="img" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+<title>Structured, availability-conditioned draft value model (v0)</title>
+<desc>Each block annotated with its concrete technique and data source: data inputs, encoders (MLP, GNN, Transformer), relational primitives, the additive availability-conditioned value, and the read-out heads.</desc>
+<style>
+  .t   { font-size: 13.5px; font-weight: 600; }
+  .ts  { font-size: 11px; }
+  .tech{ font-size: 10.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; fill: #6f6e6a; }
+  .title { font-size: 15.5px; font-weight: 600; fill: #2C2C2A; }
+  .cap { font-size: 11px; fill: #5F5E5A; }
+  line { stroke: #73726c; stroke-width: 1.2; }
+</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#73726c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+
+<text class="title" x="380" y="20" text-anchor="middle">Model architecture v0 — block · concept · technique</text>
+
+<!-- Inputs (gray) -->
+<g>
+  <rect x="20" y="44" width="232" height="60" rx="8" fill="#F1EFE8" stroke="#888780"/>
+  <text class="t"  x="136" y="66" text-anchor="middle" fill="#2C2C2A">Champion</text>
+  <text class="ts" x="136" y="82" text-anchor="middle" fill="#444441">id + attributes + meta</text>
+  <text class="tech" x="136" y="98" text-anchor="middle">Data Dragon + match agg</text>
+</g>
+<g>
+  <rect x="264" y="44" width="232" height="60" rx="8" fill="#F1EFE8" stroke="#888780"/>
+  <text class="t"  x="380" y="66" text-anchor="middle" fill="#2C2C2A">Relation graph</text>
+  <text class="ts" x="380" y="82" text-anchor="middle" fill="#444441">synergy · counter · role</text>
+  <text class="tech" x="380" y="98" text-anchor="middle">co-pick / matchup stats</text>
+</g>
+<g>
+  <rect x="508" y="44" width="232" height="60" rx="8" fill="#F1EFE8" stroke="#888780"/>
+  <text class="t"  x="624" y="66" text-anchor="middle" fill="#2C2C2A">Player histories</text>
+  <text class="ts" x="624" y="82" text-anchor="middle" fill="#444441">soloQ games</text>
+  <text class="tech" x="624" y="98" text-anchor="middle">Riot API · op.gg</text>
+</g>
+
+<line x1="136" y1="104" x2="136" y2="140" marker-end="url(#arrow)"/>
+<line x1="380" y1="104" x2="380" y2="140" marker-end="url(#arrow)"/>
+<line x1="624" y1="104" x2="624" y2="140" marker-end="url(#arrow)"/>
+
+<!-- Encoders (teal) -->
+<g>
+  <rect x="20" y="140" width="232" height="66" rx="8" fill="#E1F5EE" stroke="#0F6E56"/>
+  <text class="t"  x="136" y="163" text-anchor="middle" fill="#04342C">Champion encoder</text>
+  <text class="ts" x="136" y="180" text-anchor="middle" fill="#0F6E56">fixed ⊕ meta split</text>
+  <text class="tech" x="136" y="196" text-anchor="middle">embedding + MLP + gate</text>
+</g>
+<g>
+  <rect x="264" y="140" width="232" height="66" rx="8" fill="#E1F5EE" stroke="#0F6E56"/>
+  <text class="t"  x="380" y="163" text-anchor="middle" fill="#04342C">Relation GNN</text>
+  <text class="ts" x="380" y="180" text-anchor="middle" fill="#0F6E56">→ relational embeddings</text>
+  <text class="tech" x="380" y="196" text-anchor="middle">R-GCN / GAT (PyG)</text>
+</g>
+<g>
+  <rect x="508" y="140" width="232" height="66" rx="8" fill="#E1F5EE" stroke="#0F6E56"/>
+  <text class="t"  x="624" y="163" text-anchor="middle" fill="#04342C">Player encoder</text>
+  <text class="ts" x="624" y="180" text-anchor="middle" fill="#0F6E56">set/seq over history</text>
+  <text class="tech" x="624" y="196" text-anchor="middle">Transformer → z_p</text>
+</g>
+
+<line x1="136" y1="206" x2="136" y2="242" marker-end="url(#arrow)"/>
+<line x1="380" y1="206" x2="380" y2="242" marker-end="url(#arrow)"/>
+<line x1="624" y1="206" x2="624" y2="242" marker-end="url(#arrow)"/>
+
+<!-- Primitives (purple) -->
+<g>
+  <rect x="20" y="242" width="720" height="66" rx="8" fill="#EEEDFE" stroke="#534AB7"/>
+  <text class="t"  x="380" y="266" text-anchor="middle" fill="#26215C">Relational primitives (pairwise, transferable)</text>
+  <text class="ts" x="380" y="284" text-anchor="middle" fill="#534AB7">base(c) · syn(c,a) · ctr(c,e) · vuln(c,r)　+　archetype clusters</text>
+  <text class="tech" x="380" y="300" text-anchor="middle">bilinear / small-MLP scorers · soft-clustering head</text>
+</g>
+
+<line x1="270" y1="308" x2="270" y2="346" marker-end="url(#arrow)"/>
+
+<!-- Value (coral, core) -->
+<g>
+  <rect x="20" y="346" width="500" height="74" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="1.7"/>
+  <text class="t"  x="270" y="370" text-anchor="middle" fill="#4A1B0C">Structured additive value　V(c | A)</text>
+  <text class="ts" x="270" y="389" text-anchor="middle" fill="#993C1D">base + Σ syn(allies) + Σ ctr(enemies) − exposure(c|A)</text>
+  <text class="tech" x="270" y="406" text-anchor="middle">additive combiner + softmax-exposure (deterministic)</text>
+</g>
+
+<!-- Available set A (red, fearless) -->
+<g>
+  <rect x="560" y="346" width="180" height="74" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="1.7"/>
+  <text class="t"  x="650" y="368" text-anchor="middle" fill="#501313">Available set A</text>
+  <text class="ts" x="650" y="386" text-anchor="middle" fill="#A32D2D">picks/bans + consumed</text>
+  <text class="tech" x="650" y="403" text-anchor="middle">mask · LCU live</text>
+</g>
+<line x1="560" y1="383" x2="522" y2="383" marker-end="url(#arrow)"/>
+
+<line x1="140" y1="420" x2="106" y2="462" marker-end="url(#arrow)"/>
+<line x1="230" y1="420" x2="288" y2="462" marker-end="url(#arrow)"/>
+<line x1="330" y1="420" x2="470" y2="462" marker-end="url(#arrow)"/>
+<line x1="430" y1="420" x2="652" y2="462" marker-end="url(#arrow)"/>
+
+<!-- Heads (blue) -->
+<g>
+  <rect x="20" y="462" width="172" height="62" rx="8" fill="#E6F1FB" stroke="#185FA5"/>
+  <text class="t"  x="106" y="484" text-anchor="middle" fill="#042C53">WP head</text>
+  <text class="ts" x="106" y="500" text-anchor="middle" fill="#185FA5">trains primitives</text>
+  <text class="tech" x="106" y="515" text-anchor="middle">logistic/FM · BCE</text>
+</g>
+<g>
+  <rect x="202" y="462" width="172" height="62" rx="8" fill="#E6F1FB" stroke="#185FA5"/>
+  <text class="t"  x="288" y="484" text-anchor="middle" fill="#042C53">Recommend</text>
+  <text class="ts" x="288" y="500" text-anchor="middle" fill="#185FA5">argmax c ∈ A</text>
+  <text class="tech" x="288" y="515" text-anchor="middle">value read-out</text>
+</g>
+<g>
+  <rect x="384" y="462" width="172" height="62" rx="8" fill="#E6F1FB" stroke="#185FA5"/>
+  <text class="t"  x="470" y="484" text-anchor="middle" fill="#042C53">Ban value</text>
+  <text class="ts" x="470" y="500" text-anchor="middle" fill="#185FA5">denial Δ</text>
+  <text class="tech" x="470" y="515" text-anchor="middle">WP-delta read-out</text>
+</g>
+<g>
+  <rect x="566" y="462" width="172" height="62" rx="8" fill="#E6F1FB" stroke="#185FA5"/>
+  <text class="t"  x="652" y="484" text-anchor="middle" fill="#042C53">Explanation</text>
+  <text class="ts" x="652" y="500" text-anchor="middle" fill="#185FA5">named terms</text>
+  <text class="tech" x="652" y="515" text-anchor="middle">term attribution</text>
+</g>
+
+<text class="cap" x="380" y="544" text-anchor="middle">Fearless = shrink A → exposure(c|A) drops → V rises.　Train primitives without fearless, evaluate the read-out on it.</text>
+</svg>
