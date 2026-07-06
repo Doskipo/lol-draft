@@ -18,6 +18,11 @@ series-level champion lockout (Phase 5) that *no prior model handles*, since har
 all of them (LPL 2024 / global 2025). Prior work is soloQ, black-box, single-patch, pick-only, and
 single-game.
 
+The paper's narrative device: an **identically-trained black-box set-Transformer** is built alongside
+the structured value from Phase 1 and serves as the *antagonist* throughout — every contribution is
+demonstrated as "the structured model does X, the black-box (with identical data, mask, and training)
+does not."
+
 ---
 
 ## 1. Scope: what ships vs what's stretch
@@ -28,6 +33,7 @@ Part-time over a summer ≈ 10–12 focused hrs/week for ~12 weeks. Prioritize r
 |:-----|:-----------------------------|:-------|
 | **Core (must ship — this is the paper)** | Data pipeline + SQL DB | required |
 | | WP backbone + dumb priors as floors | required |
+| | Black-box set-Transformer (the *antagonist* baseline, §3.3b) | required |
 | | Fixed/meta champion decomposition (gap 1) | required |
 | | Relation-graph embeddings + archetypes (gap 4) | required |
 | | Future-patch evaluation | required |
@@ -59,6 +65,9 @@ and build the **pro-only spine before the hybrid** so something trains end-to-en
   where player representations are learned *and* where the runtime op.gg input comes from. Note: soloQ
   win-rate is **not** an optimality signal (it rewards solo-carry/forgiving champions); coordinated
   optimality comes from the **pro** win label. Also hosts the live **LCU** demo.
+  *Register the personal API key in W1* (it's instant, and soloQ meta stats may be needed earlier than
+  Phase 7 if pro-only meta features prove too noisy); the production-key application is a separate,
+  slower process — file it when Phase 7 approaches.
 
 **Reality check to run FIRST (before any modeling):** count games per patch in Oracle's Elixir.
 The meta shifts every patch and you cannot naively pool 10 years, so your *effective per-meta sample
@@ -70,6 +79,13 @@ it shares statistical strength across patches.
 small-data problem and makes the fixed-attribute generalization (gap 1) and soloQ pretraining (Phase 7)
 even more load-bearing for the fearless modeling. Note soloQ has **no** native fearless format, so the
 series/fearless signal is pro-only and rare — count fearless series per patch early, like games/patch.
+
+**Third reality check — entity-resolution spike (1 day, before committing to full ingest).** Cross-source
+reconciliation (Oracle's Elixir ↔ Leaguepedia game / player / team IDs, renames, region quirks) is where
+projects like this bleed weeks, and series reconstruction depends on it. Take **50 games** and try to join
+them across both sources; see what breaks. Pre-committed fallback if reconciliation is ugly: Oracle's
+Elixir alone gives picks + pick order (bans exist but unordered) — enough for everything except the
+ordered-ban analysis. Decide *in advance* what gets dropped, not mid-crisis.
 
 ### 2.1 SQL schema (normalize on ingest)
 
@@ -84,7 +100,8 @@ teams(team_id PK, name, region)
 games(game_id PK, patch_id FK, date, league, blue_team_id FK, red_team_id FK,
       winner_side, duration, series_id FK NULL, game_in_series NULL)
 draft_actions(game_id FK, seq_index, action_type ENUM(pick,ban),
-              side ENUM(blue,red), champion_id FK, player_id FK NULL, role NULL)  -- THE ordered draft
+              side ENUM(blue,red), champion_id FK, player_id FK NULL, role NULL,
+              PRIMARY KEY (game_id, seq_index))                                   -- THE ordered draft
 player_game(game_id FK, player_id FK, side, role, champion_id FK, result)         -- for histories
 series(series_id PK, format ENUM(bo1,bo3,bo5), event, date,
        team_a_id FK, team_b_id FK, fearless_mode ENUM(none,soft,hard))            -- for Phase 5
@@ -97,6 +114,22 @@ derive, per (series, game), the **fearless-unavailable set** = champions picked 
 (both teams for `hard`, same team only for `soft`). `fearless_mode` is not a data field anywhere —
 you build the `fearless_config` lookup by hand from the public adoption timeline (LPL soft 2024 →
 hard 2025; LCK Cup, LEC, LTA, First Stand/MSI/Worlds hard from 2025), keyed by event + date.
+
+### 2.2 Anti-leakage rule for aggregated features (bake in from day one)
+
+Any feature that is an **aggregate over games** (per-patch winrate / pickrate / banrate in
+`champion_meta`; co-pick / matchup winrates behind relation-graph edges) must be computed **as-of**:
+
+- **Meta features for patch $\pi_T$ come from patch $\pi_{T-1}$** (or, stricter, from games strictly
+  before the current game's date). At test time on a future patch, the alternative — same-patch
+  aggregates — is computed from the very games being evaluated (leakage), and at *real* draft time on a
+  fresh patch those aggregates don't exist yet. As-of is also the honest deployment scenario.
+- **Relation-graph edges are built from the training window only** (or time-decayed), never the full
+  dataset, or the future-patch eval silently leaks.
+
+Implement as date-parameterized SQL views / query functions (`meta_asof(champion, date)`,
+`edges_asof(date)`) so leakage is structurally impossible rather than a discipline problem.
+Retrofitting this after ingest is painful — it goes in `schema.sql`/`queries.py` from the start.
 
 ---
 
@@ -116,7 +149,7 @@ generalization the *same* property. This table is the canonical reference (match
 | Champion encoder | fixed ⊕ meta split | embedding + MLP + gate | — |
 | Relation GNN | relational embeddings | R-GCN / GAT (PyG) | — |
 | Player encoder | history → `z_p` | **Transformer** (set/seq) | — |
-| Primitives | base, syn, ctr, vuln | bilinear / small-MLP scorers | — |
+| Primitives | base, syn, ctr (vuln ≡ ctrᵀ) | bilinear / small-MLP scorers | — |
 | Archetypes | soft champion clusters | clustering / prototype head | — |
 | **Value `V(c\|A)`** | additive + exposure | **deterministic combiner** | — |
 | Available set `A` | feasible + fearless-consumed | mask (LCU live at inference) | series/draft state |
@@ -130,12 +163,23 @@ V(c \mid \text{allies},\text{enemies},A) \;=\;\; & \text{base}(c\mid\pi) \;+\; \
 &+\; \sum_{e\in\text{enemies}}\text{ctr}(c,e) \;-\; \text{exposure}(c\mid A)
 \end{aligned}$$
 
-$$\text{exposure}(c\mid A) \;=\; \operatorname*{softmax/max}_{\,r\in A_{\text{enemy}}}\; \text{vuln}(c,r) \qquad(\text{best \emph{available} answer to } c)$$
+$$\text{exposure}(c\mid A) \;=\; \operatorname*{softmax}_{\,r\in A_{\text{enemy}}}\; w_r\,\text{vuln}(c,r), \qquad \text{vuln}(c,r) \;\equiv\; \text{ctr}(r,c) \qquad(\text{best \emph{available} answer to } c)$$
+
+**`vuln` is not a separate primitive — it is `ctr` read in transpose.** This is deliberate: the WP loss
+only flows gradients through base/syn/ctr (exposure appears in the recommendation read-out, not the
+training objective), so a free-standing `vuln` scorer would never be trained. Defining
+$\text{vuln}(c,r)\equiv\text{ctr}(r,c)$ means exposure is *derived* from a trained primitive with zero
+extra parameters, and tightens the fearless claim: *the same trained counter primitive, read in reverse
+and conditioned on availability*.
+
+**Weights $w_r$:** uniform in v0. Once the enemy pick-likelihood head exists (Phase 4), set
+$w_r \propto p(\text{enemy picks } r)$ — an unweighted softmax over all of $A_\text{enemy}$ overweights
+champions the enemy would never pick (wrong role, in no one's pool). This *unifies* the ban module and
+the exposure operator into one mechanism (see §3.6).
 
 `A` enters **only here**, not in the encoders or primitives — that separation is what lets you train
-primitives without fearless and test the read-out on it (see §3.8). A flexible set-Transformer backbone
-(§3.3) is an optional **v1** expressivity upgrade; keep any learned residual availability-agnostic so it
-can't memorize fearless.
+primitives without fearless and test the read-out on it (see §3.8). Any learned residual on top must
+stay availability-agnostic so it can't memorize fearless.
 
 ### 3.1 Champion encoder — fixed/meta decomposition (gap 1, from `v_attr`)
 
@@ -148,6 +192,15 @@ vector), gated by $g$.
 Claim to prove: hold out a **future patch**; the fixed part places new/reworked champions sensibly
 where an ID-only model cannot.
 
+**Small-N discipline (per-patch pro N will be a few hundred games at best):**
+- `base(c|π)` **flows through $z_c$** (a small head on the champion encoding) — never a free
+  (champion, patch) parameter table, or the model overfits exactly where the fixed/meta split was
+  supposed to save it.
+- Raw `champion_meta` stats (winrate etc. on ~tens of pro games per champ per patch) are mostly noise —
+  apply **empirical-Bayes shrinkage** toward the previous patch's value / a global prior before they
+  enter $z_{\text{meta}}$ (shrinkage weight $\propto n_{\text{games}}$). If pro-only meta features stay
+  too noisy even shrunk, soloQ aggregates are the fallback (personal API key registered W1).
+
 ### 3.2 Player encoder (player-conditioning)
 $z_p = \text{PlayerEncoder}(\text{history}_p)$ — transformer/set over recent games (champion, role,
 result, patch). Captures champion pool + form + role flexibility. (DraftRec's player network is the
@@ -155,17 +208,27 @@ reference.) **Trained on soloQ histories** and shared across domains — see §6
 train/inference consistency rule (at runtime you only have op.gg/soloQ histories, so pros must also be
 represented via their soloQ accounts during pro fine-tuning).
 
-### 3.3 WP backbone (v0 = additive; set-Transformer = v1)
-**v0:** the WP head is the additive value of §3.0 read team-vs-team — $P(\text{blue wins})$ is a
-logistic / factorization-machine readout of $\sum \text{base} + \sum \text{syn} - \sum \text{ctr}$ over
-the two lineups, trained with BCE on outcomes. This trains the primitives and stays interpretable +
-fearless-generalizable.
-**v1 (optional upgrade):** tokenize 10 slots
+### 3.3 WP backbone — structured spine + black-box antagonist (BOTH ship in Phase 1)
+
+**(a) Structured spine (the model).** The WP head is the additive value of §3.0 read team-vs-team —
+$P(\text{blue wins})$ is a logistic / factorization-machine readout of
+$\sum \text{base} + \sum \text{syn} - \sum \text{ctr}$ over the two lineups, trained with BCE on
+outcomes. This trains the primitives and stays interpretable + fearless-generalizable. Everything
+(recommend / ban / explain) reads out of this.
+
+**(b) Set-Transformer (the antagonist — not an upgrade, a *baseline*).** Tokenize 10 slots
 $\text{token}_i = z_{c_i} \oplus z_{p_i} \oplus \text{role} \oplus \text{side} \oplus \text{draftpos}$,
-run a set/sequence Transformer → per-team pooling → $P(\text{blue wins})$ for extra raw fit.
-Permutation-equivariant within team (tags, not raw order); draft-step positional encoding gives
-counterpick awareness. Route *recommendation* through the structured value regardless, so
-generalization comes from the read-out, not the backbone.
+run a set/sequence Transformer → per-team pooling → $P(\text{blue wins})$. Permutation-equivariant
+within team (tags, not raw order); draft-step positional encoding gives counterpick awareness.
+**Its role:** the headline experiment (§3.8) needs an *identically-trained black-box* that sees the same
+data and the same mask but has no availability-conditioned structure — this is it. Build it in Phase 1
+alongside (a); it also serves as a raw-fit ceiling (if the additive spine trails it badly on plain WP
+accuracy, the primitives are underfit).
+
+Route *recommendation* through the structured value regardless, so generalization comes from the
+read-out, not the backbone. If later the additive spine needs extra expressivity, an
+availability-agnostic learned residual on top of (a) is the sanctioned upgrade path — never routing
+recommendations through (b).
 
 ### 3.4 Recommendation read-out (the live use)
 At current slot for player $p$, role $r$, feasible set $F$:
@@ -188,6 +251,12 @@ $$\text{BanValue}(c) \;=\; \mathbb{E}\!\left[\text{WP}_{\text{us}}\mid c\text{ a
 Weight "available" by each enemy player's probability of picking $c$ (from history) $\times$ their
 strength with it. High-value ban = champion an enemy player both loves and is strong on. Pro data makes
 this signal strong (pro bans are surgically targeted).
+
+**Unification:** the same pick-likelihood head supplies the weights $w_r$ in the exposure operator
+(§3.0) — bans and exposure are one mechanism ("what is the opponent realistically going to do with what's
+available?") applied in two directions. One head, two read-outs; a nicer paper story and less code.
+Note the eval caveat up front: top-k accuracy vs actual pro bans measures *predictable* bans, not *good*
+bans — report it as a sanity check, and let the WP-delta denial case study carry the argument.
 
 ### 3.7 Flex / latent role (gap 2, from `flex_uncertain`) — if time
 Model role as latent: $q(r\mid c,\pi)$ = distribution over roles $c$ is played in this patch; team
@@ -218,36 +287,59 @@ original draft's dual-pooling idea, now justified). Remaining-pool player condit
 comfort is relative to what's *left*, so a depleted one-trick reads as weaker and more predictable.
 Full multi-game series search / RL is **stretch** (Phase 8).
 
-**Headline experiment (the paper's centerpiece):** train every primitive on **non-fearless** data only,
-then evaluate the availability-conditioned read-out on held-out **fearless** states — show it elevates
-exactly the picks whose answers are consumed, where an identically-trained black-box WP model does not.
+**Headline experiment (the paper's centerpiece) — metrics defined UP FRONT, because "the black-box
+fails" must be measurable.** Train every primitive on **non-fearless** data only; the claim is that the
+availability-conditioned read-out elevates exactly the picks whose answers are consumed, where the
+identically-trained black-box set-Transformer (§3.3b, same data, same mask) does not. Actual pro picks
+in fearless games are a *confounded* label (pros adapt too) and fearless data is scarce, so the eval has
+a primary result that needs **zero fearless data** plus confirmations on the real thing:
+
+1. **Synthetic counter-consumption probe (PRIMARY figure — needs no fearless data).** Take real
+   non-fearless drafts; artificially remove a champion $c$'s top-$k$ counters from $A$; measure
+   $\Delta V(c)$ in the structured model vs $\Delta \widehat{WP}$-attribution in the black-box.
+   Prediction: the structured model responds monotonically in $k$ (exposure drops by construction);
+   the black-box, whose function never conditions on $A$ beyond the hard mask, does not. Dose-response
+   curve = the figure.
+2. **Stratified rank agreement (real fearless states, confirmation).** Rank correlation between model
+   recommendation and actual pro picks, *stratified by whether the pick's usual counters were consumed*.
+   The structured model's advantage should concentrate in the consumed stratum.
+3. **Late-series calibration (real fearless states, confirmation).** WP Brier/ECE broken down by
+   `game_in_series` — games 4–5 are where pools are most depleted and where availability-conditioning
+   should pay.
+
 That demonstrates learned *concepts*, not memorized meta; fearless data becomes confirmation +
 calibration, which dissolves the scarce-data worry. The champion-diversity-per-series figure (§4) is the
-Riot-facing result.
+Riot-facing result. Note the probe (1) only needs trained primitives + exposure, so a v0 of it runs as
+early as **Phase 3** — don't wait for Phase 5.
 
 ---
 
 ## 4. Evaluation (this is what makes it a paper, not a demo)
 
 - **Splits:** train ≤ patch T, validate T+1, test T+2+. NEVER random splits (leaks the meta).
-  Report per-future-patch.
+  Report per-future-patch. **Feature leakage:** all aggregated features obey the as-of rule (§2.2) —
+  meta features from the *previous* patch, relation edges from the training window only.
 - **WP model:** accuracy, AUC, and **calibration (Brier / ECE)** — a recommender's WP must be meaningful.
 - **Recommendation:** top-k accuracy (is the actually-picked champion ranked high?) AND predicted-WP
   uplift of recommended vs actual (since actual pick ≠ optimal pick). Beat both priors
   (meta tier-list, player-comfort) and a re-implemented DraftRec-style baseline.
 - **Fixed/meta ablation:** cross-patch generalization — fixed-attribute model degrades gracefully on
   unseen champions vs ID-only model that can't represent them.
-- **Bans:** top-k ban accuracy (predict actual pro bans) + qualitative denial case study.
+- **Bans:** top-k ban accuracy (predict actual pro bans) **as a sanity check only** — it measures
+  *predictable* bans, not *good* bans; the WP-delta denial case study carries the argument.
 - **Hybrid ablation (Phase 7):** pro-only vs soloQ-pretrained→pro-fine-tuned. This directly measures
   what the hybrid buys (better embeddings? better cold-start? better calibration on rare matchups?).
   Also check **domain/patch separability** — soloQ and pro don't share patch timing exactly, so verify
   the domain variable isn't silently absorbing patch effects (e.g. hold domain fixed, vary patch).
-- **Fearless (Phase 5):** (i) sanity — recommendations must never name a consumed champion (mask is
-  hard, but verify); (ii) does series-state conditioning help? compare WP/recommendation with vs
-  without the consumed-pool summary, broken down by `game_in_series` (the late-series games are where
-  it should matter most); (iii) **diversity metric** — champion diversity per series, the exact thing
-  Riot tracked when justifying fearless, which makes a compelling figure; (iv) recency split — train on
-  earlier 2025 series, test on later ones (fearless data is recent, so this doubles as a stress test).
+- **Fearless — centerpiece (metrics fixed in §3.8):** (0) **synthetic counter-consumption probe** —
+  the primary, fearless-data-free figure (dose-response of $\Delta V$ vs # counters removed, structured
+  vs black-box); (i) sanity — recommendations must never name a consumed champion (mask is hard, but
+  verify); (ii) does series-state conditioning help? compare WP/recommendation with vs without the
+  consumed-pool summary, broken down by `game_in_series`; (iii) **stratified rank agreement** on real
+  fearless states (advantage should concentrate where a pick's counters were consumed);
+  (iv) **late-series calibration** — Brier/ECE by `game_in_series`; (v) **diversity metric** — champion
+  diversity per series, the exact thing Riot tracked when justifying fearless, a compelling figure;
+  (vi) recency split — train on earlier 2025 series, test on later ones (doubles as a stress test).
 - **Interpretability:** synergy/counter attribution examples + archetype-map viz + one reproduced
   pro-draft case study.
 
@@ -348,10 +440,13 @@ because the encoder learned the mapping *history → representation* (same as Dr
 
 ## 7. Timeline (part-time, ~12+ weeks — a guide, expect slippage)
 
-- **W1–3:** Data pipeline + DB + EDA. Confirm pick/ban-order columns; count games/patch. Reconstruct
-  **series** (`series_id`, `game_in_series`) + build the `fearless_config` lookup; count fearless
-  series/patch. *(Most of the SQL learning lives here — don't rush it.)*
-- **W4–5:** WP backbone + priors + eval harness + **fearless-correct mask** (cheap). First baselines.
+- **W1–3:** Data pipeline + DB + EDA. **Day 1–2: register Riot personal API key + run the 50-game
+  entity-resolution spike (§2)** — its outcome decides the Leaguepedia commitment. Confirm
+  pick/ban-order columns; count games/patch. As-of aggregation views (§2.2) go into the schema now.
+  Reconstruct **series** (`series_id`, `game_in_series`) + build the `fearless_config` lookup; count
+  fearless series/patch. *(Most of the SQL learning lives here — don't rush it.)*
+- **W4–5:** WP backbone (**both** the additive spine and the black-box set-Transformer antagonist,
+  §3.3) + priors + eval harness + **fearless-correct mask** (cheap). First baselines.
 - **W6–7:** Fixed/meta decomposition + future-patch ablation. **Contribution #1.**
 - **W8–9:** Relation graph + archetypes + interpretability viz. **Contribution #2.**
 - **W10–11:** Player-conditioned bans. **Contribution #3 (the hook).**
@@ -394,6 +489,9 @@ and answer three questions before writing any model code:
 1. Confirm the pick-order and ban columns exist and how they're laid out across the 12 rows/game.
 2. Count distinct games **per patch** — your effective per-meta sample size.
 3. How many distinct (champion, patch) pairs appear — this sizes the meta-embedding table.
+4. Then the **entity-resolution spike**: join 50 of those games against Leaguepedia and see what
+   breaks, *before* committing to the full dual-source ingest.
 
-Those three numbers determine whether you lean harder on the fixed-attribute generalization (small
-data) or can afford richer per-patch meta embeddings (large data).
+Those numbers determine whether you lean harder on the fixed-attribute generalization (small data) or
+can afford richer per-patch meta embeddings (large data) — and whether Leaguepedia is a first-class
+source or a supplement.

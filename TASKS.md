@@ -40,7 +40,9 @@ graph TD
 > games-per-patch number written down.
 
 **0.1 Environment & repo**
-- [ ] Create repo `lol-draft`, `git init`, Python env (uv or conda)
+- [x] Create repo `lol-draft`, `git init`, Python env (uv or conda)
+- [ ] **Register Riot personal API key** (instant; needed as soloQ-meta fallback long before Phase 7 —
+      the *production* key application is separate and slow, file it when Phase 7 approaches)
 - [ ] Install: `polars`, `duckdb`, `requests`, `torch`, `torch-geometric` (PyG later is fine)
 - [ ] Lay down the folder skeleton from `PROJECT_SPEC.md` §5
 - [ ] (defer) Hydra + Weights & Biases — add when training starts in Phase 1
@@ -53,8 +55,15 @@ graph TD
 - [ ] Count distinct (champion, patch) pairs → record: `____`
 - [ ] Decision note: small per-patch N ⇒ lean harder on fixed attributes + Phase 6
 
+**0.2b Entity-resolution spike** *(1 day, BEFORE committing to the full dual-source ingest — spec §2)*
+- [ ] Join **50 games** Oracle's Elixir ↔ Leaguepedia (game / player / team IDs); log every mismatch
+- [ ] Decision note: Leaguepedia = first-class source, or fallback to OE-only
+      (OE alone = picks + pick order, bans unordered ⇒ lose only the ordered-ban analysis)
+
 **0.3 Schema & ingest**
-- [ ] Write `schema.sql` (the 8 tables in `PROJECT_SPEC.md` §2.1)
+- [ ] Write `schema.sql` (the tables in `PROJECT_SPEC.md` §2.1; `draft_actions` PK = `(game_id, seq_index)`)
+- [ ] **As-of aggregation views** (spec §2.2): `meta_asof(champion, date)` = previous-patch stats,
+      `edges_asof(date)` = train-window-only relation stats — leakage structurally impossible
 - [ ] `ingest_oracle.py`: CSV → normalized tables
 - [ ] Sanity queries: row counts, FK integrity, per-champion winrate matches the CSV
 
@@ -78,23 +87,31 @@ graph TD
 
 ## Phase 1 · WP backbone + priors (W4–5) `[core]`
 
-> Exit: WP model beats both priors on a held-out **future** patch; `recommend()` works.
+> Exit: **both** WP models (structured spine + black-box antagonist) beat both priors on a held-out
+> **future** patch; `recommend()` works through the structured value.
 
 - [ ] Prior A — meta tier-list (top-winrate champ per role/patch)
 - [ ] Prior B — player-comfort (player's best champ per role from history)
 - [ ] Tokenizer: champion ⊕ role ⊕ side ⊕ patch (players added later)
-- [ ] WP set-Transformer → `P(blue win)`
-- [ ] Train loop + metrics: accuracy, AUC, **Brier / ECE** (calibration)
-- [ ] Future-patch eval harness; confirm model > priors
+- [ ] **Structured spine (the model):** additive value → logistic/FM WP read-out team-vs-team,
+      BCE on outcomes — trains base / syn / ctr (spec §3.3a)
+- [ ] **Black-box set-Transformer (the antagonist):** same data, same mask, no availability structure —
+      the baseline the centerpiece experiment beats; also the raw-fit ceiling check (spec §3.3b)
+- [ ] **Exposure operator:** `vuln(c,r) ≡ ctr(r,c)` (transpose — no separate scorer, no untrained
+      params); softmax over `A_enemy`, uniform weights in v0 (pick-likelihood weights arrive in Phase 4)
+- [ ] Train loop + metrics: accuracy, AUC, **Brier / ECE** (calibration) — for BOTH models
+- [ ] Future-patch eval harness (as-of features only, spec §2.2); confirm both models > priors
 - [ ] **Fearless-correct mask:** `F` also removes the series consumed-set (cheap; makes the model legal)
-- [ ] Greedy recommendation read-out (argmax WP over feasible set)
+- [ ] Greedy recommendation read-out (argmax V over feasible set — always through the structured value)
 
 ---
 
 ## Phase 2 · Fixed/meta champion encoder (W6–7) `[novel]` — contribution #1
 
 - [ ] `z_fix(a_c)` MLP over intrinsic attributes
-- [ ] `z_meta(c, π)` patch-conditioned component + gate
+- [ ] `z_meta(c, π)` patch-conditioned component + gate — inputs are **shrunk** meta stats
+      (empirical-Bayes toward previous patch / global prior, weight ∝ n_games; spec §3.1)
+- [ ] `base(c|π)` head reads from `z_c` — **never** a free (champion, patch) table
 - [ ] Ablation: ID-only vs +fixed vs +meta on unseen-champion / future-patch
 - [ ] Plot: generalization gap narrows with fixed attributes
 
@@ -102,11 +119,15 @@ graph TD
 
 ## Phase 3 · Relation graph + archetypes (W8–9) `[novel]` — contribution #2
 
-- [ ] Build synergy / counter / shared-role edges from match stats
+- [ ] Build synergy / counter / shared-role edges from match stats — **train-window only / as-of**
+      (`edges_asof`, spec §2.2; full-dataset edges leak into future-patch eval)
 - [ ] GNN (PyG) over the static graph → champion embeddings feed the WP model
 - [ ] Archetype clustering + soft-assignment head
 - [ ] Interpretability: per-pick attribution ("synergy with X / counter to Y")
 - [ ] Archetype-map visualization (the visual artifact)
+- [ ] **Synthetic counter-consumption probe, v0** (centerpiece dry-run — needs NO fearless data):
+      remove champ `c`'s top-k counters from `A` on real drafts → ΔV dose-response, structured vs
+      black-box (spec §3.8 metric 1). If this doesn't separate the models, find out NOW, not in Phase 5
 
 ---
 
@@ -114,14 +135,19 @@ graph TD
 
 - [ ] Enemy pick-likelihood head (from histories)
 - [ ] `BanValue(c)` = WP delta over enemy comfort picks
-- [ ] Eval: top-k ban accuracy vs actual pro bans + a denial case study
+- [ ] **Wire pick-likelihood into the exposure weights** `w_r` (spec §3.0/§3.6 — one head, two
+      read-outs: bans and exposure are the same mechanism)
+- [ ] Eval: top-k ban accuracy vs actual pro bans (**sanity only** — measures predictable, not good,
+      bans) + the WP-delta denial case study that carries the argument
 
 ---
 
 ## ◆ Milestone · pro-only spine ships (W12)
 
 - [ ] End-to-end on a real draft: data → WP → recommend + bans + explanations
-- [ ] Draft of the short writeup (problem, method, results vs priors + DraftRec)
+- [ ] **Centerpiece probe figure v0** (from Phase 3) in the writeup — the paper's primary result
+      already exists at the milestone, before any fearless data is touched
+- [ ] Draft of the short writeup (problem, method, results vs priors + DraftRec + the black-box antagonist)
 - [ ] Repo `README` + a reproducible run command
 
 ---
@@ -135,6 +161,9 @@ graph TD
 - [ ] Series-context features: `game_in_series`, series score, `fearless_mode`
 - [ ] Remaining-pool player conditioning (comfort = best *remaining* champion)
 - [ ] Eval: with vs without series-state, broken down by `game_in_series`
+- [ ] **Stratified rank agreement** on real fearless states (advantage should concentrate in the
+      consumed-counters stratum — spec §3.8 metric 2)
+- [ ] **Late-series calibration**: Brier/ECE by `game_in_series` (spec §3.8 metric 3)
 - [ ] Champion-diversity figure per series (the Riot-facing result)
 - [ ] Recency split: train earlier-2025 series, test later
 
@@ -150,7 +179,7 @@ graph TD
 
 ## Phase 7 · Hybrid soloQ ↔ pro `[novel]` — contribution #4
 
-- [ ] **Register Riot API key early** (approval takes time)
+- [ ] **File the Riot production API key application** (personal key done in 0.1; production approval takes time)
 - [ ] `ingest_riot_soloq.py` → soloQ matches + player histories
 - [ ] Reconcile champion / patch / role / player IDs across domains
 - [ ] Stage A: pretrain champion + relation + player encoders on soloQ WP

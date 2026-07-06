@@ -69,8 +69,8 @@
 <g>
   <rect x="20" y="242" width="720" height="66" rx="8" fill="#EEEDFE" stroke="#534AB7"/>
   <text class="t"  x="380" y="266" text-anchor="middle" fill="#26215C">Relational primitives (pairwise, transferable)</text>
-  <text class="ts" x="380" y="284" text-anchor="middle" fill="#534AB7">base(c) · syn(c,a) · ctr(c,e) · vuln(c,r)　+　archetype clusters</text>
-  <text class="tech" x="380" y="300" text-anchor="middle">bilinear / small-MLP scorers · soft-clustering head</text>
+  <text class="ts" x="380" y="284" text-anchor="middle" fill="#534AB7">base(c) · syn(c,a) · ctr(c,e) · vuln(c,r) ≡ ctr(r,c)　+　archetype clusters</text>
+  <text class="tech" x="380" y="300" text-anchor="middle">bilinear / small-MLP scorers (vuln = ctrᵀ, no extra params) · soft-clustering head</text>
 </g>
 
 <line x1="270" y1="308" x2="270" y2="346" marker-end="url(#arrow)"/>
@@ -80,7 +80,7 @@
   <rect x="20" y="346" width="500" height="74" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="1.7"/>
   <text class="t"  x="270" y="370" text-anchor="middle" fill="#4A1B0C">Structured additive value　V(c | A)</text>
   <text class="ts" x="270" y="389" text-anchor="middle" fill="#993C1D">base + Σ syn(allies) + Σ ctr(enemies) − exposure(c|A)</text>
-  <text class="tech" x="270" y="406" text-anchor="middle">additive combiner + softmax-exposure (deterministic)</text>
+  <text class="tech" x="270" y="406" text-anchor="middle">additive combiner + pick-likelihood-weighted softmax-exposure (deterministic)</text>
 </g>
 
 <!-- Available set A (red, fearless) -->
@@ -123,5 +123,5 @@
   <text class="tech" x="652" y="515" text-anchor="middle">term attribution</text>
 </g>
 
-<text class="cap" x="380" y="544" text-anchor="middle">Fearless = shrink A → exposure(c|A) drops → V rises.　Train primitives without fearless, evaluate the read-out on it.</text>
+<text class="cap" x="380" y="544" text-anchor="middle">Fearless = shrink A → exposure(c|A) drops → V rises.　Trained without fearless; probed vs an identically-trained black-box set-Transformer.</text>
 </svg>
