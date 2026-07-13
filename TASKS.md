@@ -41,19 +41,19 @@ graph TD
 
 **0.1 Environment & repo**
 - [x] Create repo `lol-draft`, `git init`, Python env (uv or conda)
-- [ ] **Register Riot personal API key** (instant; needed as soloQ-meta fallback long before Phase 7 —
+- [x] **Register Riot personal API key** (instant; needed as soloQ-meta fallback long before Phase 7 —
       the *production* key application is separate and slow, file it when Phase 7 approaches)
-- [ ] Install: `polars`, `duckdb`, `requests`, `torch`, `torch-geometric` (PyG later is fine)
-- [ ] Lay down the folder skeleton from `PROJECT_SPEC.md` §5
+- [x] Install: `polars`, `duckdb`, `requests`, `torch`, `torch-geometric` (PyG later is fine)
+- [x] Lay down the folder skeleton from `PROJECT_SPEC.md` §5
 - [ ] (defer) Hydra + Weights & Biases — add when training starts in Phase 1
 
 **0.2 First data look — the gating numbers** *(do this before any modeling)*
-- [ ] Download one Oracle's Elixir CSV (latest full year) from oracleselixir.com
-- [ ] Load in DuckDB; inspect the 12-rows-per-game layout
-- [ ] Confirm the pick-order and ban columns exist; write down the column mapping
-- [ ] **Count distinct games per patch** → record the number here: `____`
-- [ ] Count distinct (champion, patch) pairs → record: `____`
-- [ ] Decision note: small per-patch N ⇒ lean harder on fixed attributes + Phase 6
+- [x] Download one Oracle's Elixir CSV (latest full year) from oracleselixir.com
+- [x] Load in DuckDB; inspect the 12-rows-per-game layout
+- [x] Confirm the pick-order and ban columns exist; write down the column mapping
+- [x] **Count distinct games per patch** → record the number here: `500-600` typically
+- [x] Count distinct (champion, patch) pairs → record: `30` champion per patch on average (for off meta 0-5...)
+- [x] Decision note: small per-patch N ⇒ lean harder on fixed attributes + Phase 6 - Small N!
 
 **0.2b Entity-resolution spike** *(1 day, BEFORE committing to the full dual-source ingest — spec §2)*
 - [ ] Join **50 games** Oracle's Elixir ↔ Leaguepedia (game / player / team IDs); log every mismatch
@@ -210,3 +210,4 @@ graph TD
 ## Parking lot (revisit later, don't derail now)
 
 - (add stray ideas here)
+-  Late-year patches are useless as test patches for the future-patch split; the splitter should require a minimum-N per eval patch. Coincides with post-Worlds off-season, almost no pro play.
