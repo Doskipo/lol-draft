@@ -55,8 +55,9 @@ and build the **pro-only spine before the hybrid** so something trains end-to-en
 
 **Sources (pro / tournament — required because Riot's API has no tournament data and no pick order):**
 - **Oracle's Elixir** — free daily CSVs since 2014, 12 rows/game, includes pick order. *Backbone.*
-- **Leaguepedia** — only fully accurate source for complete pick **and** ban order; SQL-like Cargo
-  tables; use `leaguepedia-parser`. *Order + player/team metadata.*
+- **Leaguepedia** — SQL-like Cargo tables via `leaguepedia-parser`. *Post-spike role: supplement* —
+  `gameInSeries` (series structure) from the cheap tier; player metadata via detail calls (Phases 4/7).
+  Draft order no longer needs it: OE + verified weave rules reconstruct it (see spike outcome below).
 - **gol.gg** — scrape as supplement / cross-validation only (no official API).
 - **Riot Data Dragon** — static champion attributes (the fixed `v_attr`). *Required for gap 1.*
 - **Riot API (soloQ)** — *first-class source for Phase 7.* Two roles: (i) **variance reduction** —
@@ -87,26 +88,50 @@ them across both sources; see what breaks. Pre-committed fallback if reconciliat
 Elixir alone gives picks + pick order (bans exist but unordered) — enough for everything except the
 ordered-ban analysis. Decide *in advance* what gets dropped, not mid-crisis.
 
-### 2.1 SQL schema (normalize on ingest)
+> **✅ Spike outcome (0.2b, done):** matching on **(date ±1 day, frozenset of 10 picked champion IDs)**
+> achieved **15/15**; zero champion-name aliases needed (OE spelling = Data Dragon spelling). Team-*name*
+> joins would have failed on **7/15** games (sponsor prefixes / mid-season renames: `Kiwoom DRX`↔`DRX`,
+> `HANJIN BRION`↔`OKSavingsBank BRION`, …) — champion-set key vindicated; those 7 pairs seed `team_aliases`.
+> Also verified: (i) `picksBans` at LP's detail tier matches the fixed tournament interleave exactly →
+> **OE per-team order + format rules reconstructs the full 20-action draft** (weave rules verified);
+> (ii) patch schemes differ (OE `15.06` double ↔ LP `'25.06'` string) — reconcile on suffix, store VARCHAR;
+> (iii) identities live in LP's nested `.sources` (players incl. real name/country; team names);
+> (iv) costs: bot-password auth mandatory; ~10–30 s/detail call (2 parallel requests each), connection
+> drops under load, much faster off-peak → cached background scripts + exponential backoff, never interactive.
+> **Verdict: OE = backbone incl. full draft order; Leaguepedia = supplement** — `gameInSeries` from the
+> cheap skeleton tier, detail calls only where player metadata matters (Phases 4/7).
+
+### 2.1 SQL schema (normalize on ingest) — ✅ implemented in `src/db/schema.sql` (11 tables)
 
 ```sql
-patches(patch_id PK, version, start_date, end_date)
-champions(champion_id PK, name)
-champion_attributes(champion_id FK, attack_range, damage_type, cc_score,
-                    mobility, durability, scaling, role_tags, ... )      -- fixed (Data Dragon)
-champion_meta(champion_id FK, patch_id FK, winrate, pickrate, banrate, n_games)  -- meta-dependent
-players(player_id PK, name, region, role_primary)
-teams(team_id PK, name, region)
-games(game_id PK, patch_id FK, date, league, blue_team_id FK, red_team_id FK,
-      winner_side, duration, series_id FK NULL, game_in_series NULL)
-draft_actions(game_id FK, seq_index, action_type ENUM(pick,ban),
-              side ENUM(blue,red), champion_id FK, player_id FK NULL, role NULL,
-              PRIMARY KEY (game_id, seq_index))                                   -- THE ordered draft
-player_game(game_id FK, player_id FK, side, role, champion_id FK, result)         -- for histories
-series(series_id PK, format ENUM(bo1,bo3,bo5), event, date,
-       team_a_id FK, team_b_id FK, fearless_mode ENUM(none,soft,hard))            -- for Phase 5
-fearless_config(event, region, date_range, mode)  -- lookup: which competitions ran hard/soft/none
+champions(champion_id PK, name)                      -- keyed on Riot numeric ID (LP speaks IDs, OE names)
+teams(team_id PK, name, league_region)               -- surrogate key assigned at ingest
+team_aliases(alias PK, team_id FK)                   -- every spelling seen anywhere -> canonical team
+                                                     --   (seeded by the 7 spike mismatch pairs)
+players(player_id PK)                                -- v0: name-as-ID; player_aliases if it bites
+series(series_id PK, best_of CHECK(1,3,5), team1_id FK, team2_id FK, event, date)
+games(game_id PK, patch VARCHAR, blue_team_id FK, red_team_id FK, date,
+      blue_team_won BOOL, league, series_id FK NULL, game_in_series NULL)
+draft_actions(game_id FK, seq_index, action_type CHECK(pick,ban), side CHECK(blue,red),
+              champion_id FK NULL, player_id FK NULL, role NULL,
+              PRIMARY KEY (game_id, seq_index))      -- THE ordered draft, via verified weave rules
+champion_attributes(champion_id PK/FK, info marks, partype, tag_primary/secondary,
+                    ~20 Data Dragon base stats as DOUBLE, ddragon_version)  -- fixed v_attr snapshot
+champion_meta(champion_id, patch, n_games, n_wins, n_bans,
+              PK(champion_id, patch))                -- grain: (champion, patch); bans live here
+champion_role_meta(champion_id, patch, role, n_games, n_wins,
+              PK(champion_id, patch, role))          -- grain adds role; feeds Phase 6 q(r|c,π)
+fearless_config(event, date_start, date_end NULL, mode CHECK(none,soft,hard),
+              PK(event, date_start))                 -- hand-built adoption timeline
 ```
+
+Design principles baked in (each traceable to a Phase-0 finding): **patch is VARCHAR** everywhere
+(OE stores a double and drops trailing zeros: 15.10 → 15.1, which silently breaks cross-source joins);
+**facts, not features** — store counts (`n_wins`, `n_games`), never rates; winrates, normalizations,
+comfort scores are pipeline-computed (also why there's no `player_game` table: histories are a query
+over `draft_actions` picks); **stable surrogate keys + alias tables** for identity that drifts across
+sources/seasons; **one grain per table** (bans have no role → `champion_meta`, not `champion_role_meta`);
+**derive, don't duplicate** (one `blue_team_won`, no redundant red twin; series winner queried, not stored).
 
 `draft_actions` is the table pro data gives you and the Riot API does not — the linchpin for flex,
 bans, and counterpick. `series` + `game_in_series` are the linchpin for **fearless**: from them you

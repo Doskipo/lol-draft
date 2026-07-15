@@ -51,26 +51,34 @@ graph TD
 - [x] Download one Oracle's Elixir CSV (latest full year) from oracleselixir.com
 - [x] Load in DuckDB; inspect the 12-rows-per-game layout
 - [x] Confirm the pick-order and ban columns exist; write down the column mapping
-- [x] **Count distinct games per patch** → record the number here: `500-600` typically
-- [x] Count distinct (champion, patch) pairs → record: `30` champion per patch on average (for off meta 0-5...)
-- [x] Decision note: small per-patch N ⇒ lean harder on fixed attributes + Phase 6 - Small N!
+- [x] **Count distinct games per patch** → record: `200–900, typically ~500–600` (tail patches 15.21+
+      near-empty: post-Worlds off-season → min-N rule for test patches, see parking lot)
+- [x] Count distinct (champion, patch) pairs → record: `3,183` (~800 of ~4,000 possible pairs never
+      occur in a full year → ID-only per-patch representation impossible; ≈30 games/champ/patch avg, 0–5 off-meta)
+- [x] Decision note: small per-patch N ⇒ lean harder on fixed attributes + shrinkage (spec §3.1) + Phase 6. **Locked.**
 
-**0.2b Entity-resolution spike** *(1 day, BEFORE committing to the full dual-source ingest — spec §2)*
-- [ ] Join **50 games** Oracle's Elixir ↔ Leaguepedia (game / player / team IDs); log every mismatch
-- [ ] Decision note: Leaguepedia = first-class source, or fallback to OE-only
-      (OE alone = picks + pick order, bans unordered ⇒ lose only the ordered-ban analysis)
+**0.2b Entity-resolution spike** *(done — full write-up in `notebooks/02_entity_spike.ipynb` + spec §2 outcome box)*
+- [x] Join OE ↔ Leaguepedia on **(date ±1, frozenset of 10 picked champion IDs)** → **15/15 matched**;
+      0 champion aliases needed; **7/15 team-name mismatches** (sponsor prefixes/renames) → seed `team_aliases`
+- [x] Bonus finds: LP `picksBans` verifies the **weave rules** (OE per-team order + format = full 20-action
+      draft); patch schemes differ (`15.06`↔`'25.06'`); identities hide in LP's `.sources`; costs measured
+      (bot-password auth, ~10–30 s/detail call, backoff + incremental cache mandatory, fetch off-peak)
+- [x] Decision note: **OE = backbone incl. full draft order; Leaguepedia = supplement** —
+      `gameInSeries` from cheap skeleton tier; detail calls only for player metadata (Phases 4/7)
 
 **0.3 Schema & ingest**
-- [ ] Write `schema.sql` (the tables in `PROJECT_SPEC.md` §2.1; `draft_actions` PK = `(game_id, seq_index)`)
+- [x] Write `schema.sql` — **11 tables live** (`SHOW TABLES` verified), incl. `team_aliases` (seeded by
+      spike) and the `champion_meta` / `champion_role_meta` grain split; principles documented in spec §2.1
 - [ ] **As-of aggregation views** (spec §2.2): `meta_asof(champion, date)` = previous-patch stats,
       `edges_asof(date)` = train-window-only relation stats — leakage structurally impossible
 - [ ] `ingest_oracle.py`: CSV → normalized tables
 - [ ] Sanity queries: row counts, FK integrity, per-champion winrate matches the CSV
 
 **0.4 Enrich**
-- [ ] Riot Data Dragon → `champion_attributes` (the fixed `v_attr`)
-- [ ] Leaguepedia (`leaguepedia-parser`) → full ban order + player metadata; reconcile IDs
-- [ ] (optional) gol.gg spot-check: a few drafts vs your DB
+- [ ] Riot Data Dragon → `champion_attributes` (the fixed `v_attr`; `name_to_id` map already built in spike)
+- [ ] Leaguepedia *(scoped per spike verdict)* → `gameInSeries` via cheap skeleton tier, matched on
+      champion-set key; cached background script with backoff, run off-peak
+- [x] gol.gg spot-check: pick/ban column order verified against a real draft (done during 0.2)
 
 **0.4b Series & fearless** *(needed for Phase 5 — set it up now while in the data)*
 - [ ] Reconstruct series: populate `series` + `games.series_id` / `game_in_series` (Leaguepedia is cleanest)
@@ -209,5 +217,11 @@ graph TD
 
 ## Parking lot (revisit later, don't derail now)
 
-- (add stray ideas here)
--  Late-year patches are useless as test patches for the future-patch split; the splitter should require a minimum-N per eval patch. Coincides with post-Worlds off-season, almost no pro play.
+- Late-year patches are useless as test patches for the future-patch split; the splitter should require a minimum-N per eval patch. Coincides with post-Worlds off-season, almost no pro play.
+- Manual champion mechanic flags (CC / dash / global / healing) as `champion_attributes` enrichment — only if Phase 2 ablations show fixed attributes matter; ~170 champs is hand-buildable.
+- Historical `champion_attributes` (Data Dragon archives every version) — v0 deliberately uses one snapshot (`ddragon_version` records which).
+- `player_aliases` table if name-as-ID bites; `player_accounts` (op.gg/soloQ links, one player → many accounts) arrives in Phase 7.
+- Feature normalization (e.g. stats relative to max) lives in the pipeline, computed on train window only — never in the DB.
+- Scrims support: `series.event = NULL` convention (the "teams using this tool on their own scrims" idea).
+- Ban role-targeting is derivable (join ban champion vs `champion_role_meta`) — no schema change; the player-level version IS Phase 4.
+- Off-meta playstyle identity (lethality-Sion problem): unobservable in draft data; represented indirectly via role conditioning + player conditioning (Phases 4/6/7).
