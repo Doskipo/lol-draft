@@ -2,4 +2,6 @@
 .venv/
 __pycache__/
 *.pyc
-data/
+data/*
+!data/seeds/
+!data/ddragon/

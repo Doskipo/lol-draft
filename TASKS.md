@@ -71,8 +71,14 @@ graph TD
       spike) and the `champion_meta` / `champion_role_meta` grain split; principles documented in spec §2.1
 - [ ] **As-of aggregation views** (spec §2.2): `meta_asof(champion, date)` = previous-patch stats,
       `edges_asof(date)` = train-window-only relation stats — leakage structurally impossible
-- [ ] `ingest_oracle.py`: CSV → normalized tables
-- [ ] Sanity queries: row counts, FK integrity, per-champion winrate matches the CSV
+- [x] `ingest_oracle.py`: CSV → normalized tables — **9,534 games / 190,680 draft actions (÷20 exact)**.
+      Two-phase structure (compute+validate, then write); central `wipe()` in reverse-FK order;
+      admission = *our* fields, not OE's `datacompleteness` flag (LPL kept!); drop-and-report for
+      source holes (506 ID-less minor-league games + 1 LRS pick/player contradiction), crash for
+      our bugs; missed bans → NULL-champion actions; `fetch_ddragon.py` pins the snapshot (16.14.1)
+- [x] Sanity queries: FK audit **0 orphans**; 300 NULL-champion bans (0.31%, matches measured
+      missingness); Locke = the only never-drafted champion (post-season release — universe ⊃ observed
+      as designed); Aatrox winrate cross-check DB vs CSV consistent (deltas ⊂ the 507 excluded games)
 
 **0.4 Enrich**
 - [ ] Riot Data Dragon → `champion_attributes` (the fixed `v_attr`; `name_to_id` map already built in spike)
@@ -225,3 +231,6 @@ graph TD
 - Scrims support: `series.event = NULL` convention (the "teams using this tool on their own scrims" idea).
 - Ban role-targeting is derivable (join ban champion vs `champion_role_meta`) — no schema change; the player-level version IS Phase 4.
 - Off-meta playstyle identity (lethality-Sion problem): unobservable in draft data; represented indirectly via role conditioning + player conditioning (Phases 4/6/7).
+- Minor-league ID-less games skipped at ingest (~480 games, 62 name-only teams, LJL-dominated;
+  plus ~26 order-less games): rescuable via name-minted teams if per-patch N ever gets desperate.
+  Decision: cleaner N over more N — majors all have pristine IDs.
