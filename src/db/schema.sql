@@ -181,3 +181,59 @@ SELECT
     cm.n_bans
 FROM patch_order po
 JOIN champion_meta cm ON cm.patch = po.prev_patch;
+
+
+CREATE OR REPLACE VIEW pair_synergy_meta AS
+SELECT
+    a.champion_id AS champ_a,
+    b.champion_id AS champ_b,
+    g.patch,
+    COUNT(*) AS n_games,
+    SUM(CASE WHEN (a.side = 'blue') = g.blue_team_won THEN 1 ELSE 0 END) AS n_wins
+FROM draft_actions a
+JOIN draft_actions b
+  ON a.game_id = b.game_id
+ AND a.side = b.side                    -- same team
+ AND a.champion_id < b.champion_id      -- canonical order: each pair once
+JOIN games g ON g.game_id = a.game_id
+WHERE a.action_type = 'pick' AND b.action_type = 'pick'
+GROUP BY a.champion_id, b.champion_id, g.patch;
+
+
+CREATE OR REPLACE VIEW pair_matchup_meta AS
+SELECT
+    a.champion_id AS champ_a,
+    b.champion_id AS champ_b,
+    g.patch,
+    COUNT(*) AS n_games,
+    SUM(CASE WHEN (a.side = 'blue') = g.blue_team_won THEN 1 ELSE 0 END) AS n_wins_a
+FROM draft_actions a
+JOIN draft_actions b
+  ON a.game_id = b.game_id
+ AND a.side != b.side                   -- opposing teams
+ AND a.champion_id < b.champion_id      -- canonical order
+JOIN games g ON g.game_id = a.game_id
+WHERE a.action_type = 'pick' AND b.action_type = 'pick'
+GROUP BY a.champion_id, b.champion_id, g.patch;
+
+
+
+CREATE OR REPLACE VIEW synergy_asof AS
+SELECT
+    po.patch,
+    ps.champ_a,
+    ps.champ_b,
+    ps.n_games,
+    ps.n_wins
+FROM patch_order po
+JOIN pair_synergy_meta ps ON ps.patch = po.prev_patch;
+
+CREATE OR REPLACE VIEW matchup_asof AS
+SELECT
+    po.patch,
+    pm.champ_a,
+    pm.champ_b,
+    pm.n_games,
+    pm.n_wins_a
+FROM patch_order po
+JOIN pair_matchup_meta pm ON pm.patch = po.prev_patch;
