@@ -1,0 +1,12 @@
+- **Wipe-and-rebuild ingest** (not incremental): CSVs are the source of truth, DB is disposable, rebuilds are seconds, schema still evolving.
+- **Data Dragon as pinned snapshot** (not live fetch): version recorded in filename; staleness self-announces via the unmapped-champion crash.
+- **Champion universe from Data Dragon, observations from CSV** (173 vs 172 — Locke).
+- **Team identity: OE teamid as grouping key + surrogate keys + alias table**; cross-source knowledge lives in data/seeds/team_aliases.csv (data, not code — same philosophy as fearless_config).
+- **Players: name-as-ID for v0** — surrogate keys without resolution knowledge would be a costume, not armor; player_aliases parked until evidence bites.
+- **Admission policy: our fields, not OE's datacompleteness flag** — LPL kept (819/820 draft-complete); ~506 ID-less minor-league games + 1 contradiction game dropped-and-reported. Cleaner N over more N.
+- **Crash vs skip doctrine: our bugs crash loudly; reality's holes get dropped-and-reported.**
+- **Missed bans = NULL-champion action rows** (real game events, schema anticipated them).
+- **Two-phase pipeline: compute/validate everything, then write** — a game_id in games is vouched for by the whole pipeline; stages never undo each other.
+- **champion_meta / champion_role_meta as views** (derive-don't-duplicate; staleness impossible; soloQ-era may convert them to tables — accepted).
+- **Schema applied by the ingest script, idempotently** (IF NOT EXISTS / OR REPLACE) — one-command rebuild from any state.
+- **Parked**: minor-league rescue via name-minted teams; fearless_config must become seed-CSV-fed before 0.4b fills it.

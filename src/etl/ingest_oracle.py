@@ -19,6 +19,8 @@ DB_PATH = DATA_DIR / "lol.duckdb"
 DDRAGON_DIR = DATA_DIR / "ddragon"
 SEEDS_DIR = DATA_DIR / "seeds"
 
+SCHEMA_PATH = PROJECT_ROOT / "src" / "db" / "schema.sql"
+
 # (side, action_type, team_slot)
 DRAFT_SEQ = {
     ("Blue", "ban", 1): 1,   ("Red", "ban", 1): 2,
@@ -34,15 +36,20 @@ DRAFT_SEQ = {
 }
 
 
+# --- Auxiliary Functions ---
 
-
-# --- Stages ---
+def apply_schema(con: duckdb.DuckDBPyConnection) -> None:
+    """Apply schema.sql (idempotent — IF NOT EXISTS / OR REPLACE inside)."""
+    con.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 def wipe(con: duckdb.DuckDBPyConnection) -> None:
     """Wipe (reverse dependency order) ONLY the tables this script rebuilds.
     Never touch hand-built tables (fearless_config) or other scripts' tables."""
     for table in ["draft_actions", "games", "team_aliases", "players", "teams", "champions"]:
         con.execute(f"DELETE FROM {table}")
+
+# --- Stages ---
+
 
 def load_name_to_id() -> dict[str, int]:
     """Build champion name -> Riot numeric ID from the cached Data Dragon file."""
@@ -264,6 +271,7 @@ def main():
 
     # ---- write (all admission decisions final) ----
     con = duckdb.connect(str(DB_PATH))
+    apply_schema(con)
     wipe(con)
     ingest_champions(con, name_to_id)
     oe_to_team = ingest_teams(con, df)

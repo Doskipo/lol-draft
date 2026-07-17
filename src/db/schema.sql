@@ -4,7 +4,7 @@
 --   patch stored as VARCHAR (OE double drops trailing zeros: 15.10 -> 15.1)
 --   champions keyed on Riot numeric ID (Leaguepedia speaks IDs, OE speaks names)
 
-CREATE TABLE champions (
+CREATE TABLE IF NOT EXISTS champions (
     champion_id  INTEGER PRIMARY KEY,   -- Riot's numeric ID (Data Dragon 'key')
     name         VARCHAR NOT NULL       -- display name, matches OE spelling
 );
@@ -12,25 +12,25 @@ CREATE TABLE champions (
 
 
 
-CREATE TABLE teams (
+CREATE TABLE IF NOT EXISTS teams (
     team_id            INTEGER PRIMARY KEY,     -- surrogate key assigned at ingest; name variants resolved via team_aliases
     name               VARCHAR NOT NULL,        -- display name, may change between seasons although same team
     league_region      VARCHAR                  -- league which the team belongs to: LCK, LEC...
 );
 
 
-CREATE TABLE team_aliases (
+CREATE TABLE IF NOT EXISTS team_aliases (
     alias    VARCHAR PRIMARY KEY,              -- any spelling seen in any source
     team_id  INTEGER NOT NULL REFERENCES teams(team_id)
 );
 
 
-CREATE TABLE players (                  -- v0: name-as-ID; known limit (renames/collisions), player_aliases table if it bites
+CREATE TABLE IF NOT EXISTS players (                  -- v0: name-as-ID; known limit (renames/collisions), player_aliases table if it bites
     player_id    VARCHAR PRIMARY KEY   
 );
 
 
-CREATE TABLE series (
+CREATE TABLE IF NOT EXISTS series (
     series_id   VARCHAR PRIMARY KEY,                                 
     best_of     INTEGER NOT NULL CHECK (best_of IN (1, 3, 5)),      -- best of 1, 3 or 5
     team1_id    INTEGER REFERENCES teams(team_id),                     -- id of one team
@@ -40,7 +40,7 @@ CREATE TABLE series (
 );
 -- games point here via games.series_id; series contents are queried, not stored
 
-CREATE TABLE games (
+CREATE TABLE IF NOT EXISTS games (
     game_id             VARCHAR PRIMARY KEY,                                -- id of the game
     patch               VARCHAR NOT NULL,                                         
     blue_team_id        INTEGER NOT NULL REFERENCES teams(team_id),
@@ -54,7 +54,7 @@ CREATE TABLE games (
 
 
 
-CREATE TABLE draft_actions (
+CREATE TABLE IF NOT EXISTS draft_actions (
     game_id             VARCHAR NOT NULL REFERENCES games(game_id),
     seq_index           INTEGER NOT NULL,                                          -- 1..20, global order via verified weave rules
     action_type         VARCHAR NOT NULL CHECK (action_type IN ('pick','ban')),
@@ -66,7 +66,7 @@ CREATE TABLE draft_actions (
 );
 
 
-CREATE TABLE champion_attributes (
+CREATE TABLE IF NOT EXISTS champion_attributes (
     champion_id             INTEGER PRIMARY KEY REFERENCES champions(champion_id),
     attack_mark             INTEGER NOT NULL,                           -- mark from 0 to 10 by Dragon
     defense_mark            INTEGER NOT NULL,                           -- mark from 0 to 10 by Dragon
@@ -103,27 +103,8 @@ CREATE TABLE champion_attributes (
 
 
 
-CREATE TABLE champion_meta (            -- grain: (champion, patch)
-    champion_id  INTEGER NOT NULL REFERENCES champions(champion_id),
-    patch        VARCHAR NOT NULL,
-    n_games      INTEGER NOT NULL,      -- picked, any role (shrinkage weight, §3.1)
-    n_wins       INTEGER NOT NULL,
-    n_bans       INTEGER NOT NULL,      -- bans have no role -> lives at this grain
-    PRIMARY KEY (champion_id, patch)
-);
 
-CREATE TABLE champion_role_meta (       -- grain: (champion, patch, role) — feeds Phase 6 q(r|c,π)
-    champion_id  INTEGER NOT NULL REFERENCES champions(champion_id),
-    patch        VARCHAR NOT NULL,
-    role         VARCHAR NOT NULL,      -- 'top','jng','mid','bot','sup' (OE vocabulary)
-    n_games      INTEGER NOT NULL,
-    n_wins       INTEGER NOT NULL,
-    PRIMARY KEY (champion_id, patch, role)
-);
-
-
-
-CREATE TABLE fearless_config (
+CREATE TABLE IF NOT EXISTS fearless_config (
     event                   VARCHAR NOT NULL,              -- 'LCK 2025', 'MSI 2025'...
     date_start              DATE NOT NULL,
     date_end                DATE,                          -- NULL = still in force
@@ -132,3 +113,31 @@ CREATE TABLE fearless_config (
 );
 -- hand-built from the public adoption timeline (spec §2.2); a game's mode is found
 -- by matching its league/event + date against these ranges
+
+
+CREATE OR REPLACE VIEW champion_meta AS
+WITH picks AS (
+    SELECT da.champion_id, g.patch,
+           COUNT(*) AS n_games,
+           SUM(CASE WHEN (da.side = 'blue') = g.blue_team_won THEN 1 ELSE 0 END) AS n_wins
+    FROM draft_actions da
+    JOIN games g USING (game_id)
+    WHERE da.action_type = 'pick'
+    GROUP BY da.champion_id, g.patch
+),
+bans AS (
+    SELECT da.champion_id, g.patch, COUNT(*) AS n_bans
+    FROM draft_actions da
+    JOIN games g USING (game_id)
+    WHERE da.action_type = 'ban' AND da.champion_id IS NOT NULL
+    GROUP BY da.champion_id, g.patch
+)
+SELECT
+    COALESCE(p.champion_id, b.champion_id) AS champion_id,
+    COALESCE(p.patch,       b.patch)       AS patch,
+    COALESCE(p.n_games, 0)                 AS n_games,
+    COALESCE(p.n_wins,  0)                 AS n_wins,
+    COALESCE(b.n_bans,  0)                 AS n_bans
+FROM picks p
+FULL OUTER JOIN bans b
+  ON p.champion_id = b.champion_id AND p.patch = b.patch
