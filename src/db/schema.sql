@@ -140,4 +140,44 @@ SELECT
     COALESCE(b.n_bans,  0)                 AS n_bans
 FROM picks p
 FULL OUTER JOIN bans b
-  ON p.champion_id = b.champion_id AND p.patch = b.patch
+  ON p.champion_id = b.champion_id AND p.patch = b.patch;
+
+
+CREATE OR REPLACE VIEW champion_role_meta AS
+SELECT
+    da.champion_id,
+    g.patch,
+    da.role,
+    COUNT(*) AS n_games,
+    SUM(CASE WHEN (da.side = 'blue') = g.blue_team_won THEN 1 ELSE 0 END) AS n_wins
+FROM draft_actions da
+JOIN games g USING (game_id)
+WHERE da.action_type = 'pick'
+GROUP BY da.champion_id, g.patch, da.role;
+
+
+
+CREATE OR REPLACE VIEW patch_order AS
+WITH parsed AS (
+    SELECT DISTINCT
+        patch,
+        CAST(split_part(patch, '.', 1) AS INTEGER) AS major,
+        CAST(split_part(patch, '.', 2) AS INTEGER) AS minor
+    FROM games
+    WHERE patch IS NOT NULL
+)
+SELECT
+    patch, major, minor,
+    LAG(patch) OVER (ORDER BY major, minor) AS prev_patch
+FROM parsed;
+
+
+CREATE OR REPLACE VIEW meta_asof AS
+SELECT
+    po.patch,
+    cm.champion_id,
+    cm.n_games,
+    cm.n_wins,
+    cm.n_bans
+FROM patch_order po
+JOIN champion_meta cm ON cm.patch = po.prev_patch;
