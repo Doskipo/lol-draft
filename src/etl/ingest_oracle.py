@@ -45,7 +45,7 @@ def apply_schema(con: duckdb.DuckDBPyConnection) -> None:
 def wipe(con: duckdb.DuckDBPyConnection) -> None:
     """Wipe (reverse dependency order) ONLY the tables this script rebuilds.
     Never touch hand-built tables (fearless_config) or other scripts' tables."""
-    for table in ["draft_actions", "games", "series", "team_aliases",
+    for table in ["fearless_config","draft_actions", "games", "series", "team_aliases",
                   "players", "teams", "champion_attributes", "champions"]:
         con.execute(f"DELETE FROM {table}")
 
@@ -302,6 +302,11 @@ def build_series(df_games: pd.DataFrame, matches: pd.DataFrame) -> tuple[pd.Data
     return df_series, matches
 
 
+def ingest_fearless(con: duckdb.DuckDBPyConnection) -> None:
+    path = SEEDS_DIR / "fearless_config.csv"
+    df_fc = pd.read_csv(path, dtype={"event": "string", "mode": "string"})
+    con.execute("INSERT INTO fearless_config BY NAME SELECT * FROM df_fc")
+    print(f"fearless_config: {len(df_fc)} rows")
 
 
 # --- Orchestrator ---
@@ -324,6 +329,7 @@ def main():
     ingest_players(con, df)
     ingest_games(con, df, oe_to_team, kept)
     insert_draft_actions(con, df_actions)
+    ingest_fearless(con)
     con.close()
 
 if __name__ == "__main__":

@@ -69,8 +69,14 @@ graph TD
 **0.3 Schema & ingest**
 - [x] Write `schema.sql` — **11 tables live** (`SHOW TABLES` verified), incl. `team_aliases` (seeded by
       spike) and the `champion_meta` / `champion_role_meta` grain split; principles documented in spec §2.1
-- [ ] **As-of aggregation views** (spec §2.2): `meta_asof(champion, date)` = previous-patch stats,
-      `edges_asof(date)` = train-window-only relation stats — leakage structurally impossible
+- [x] **As-of aggregation views** (spec §2.2): `patch_order` (numeric (major,minor) + LAG — VARCHAR
+      sort is a padding trap; chronological ordering rejected for adoption jitter) → `meta_asof`
+      joins `champion_meta` on prev_patch — same-patch stats unreachable by construction (audited:
+      faithfulness query returns zero rows). Edge layer = **counts, not edges** (facts-not-features:
+      Phase 3 computes lift/score on top): `pair_synergy_meta` / `pair_matchup_meta` (canonical-order
+      self-joins) + `synergy_asof` / `matchup_asof`. **Sparsity gating number: ~3 avg games/pair/patch**
+      (2–5 typical, tail ≈1) → shrinkage + soloQ + archetypes all load-bearing, as spec predicted.
+      Caveat (in DECISIONS): as-of is convention-enforced for consumers, not a physical law on base tables
 - [x] `ingest_oracle.py`: CSV → normalized tables — **9,534 games / 190,680 draft actions (÷20 exact)**.
       Two-phase structure (compute+validate, then write); central `wipe()` in reverse-FK order;
       admission = *our* fields, not OE's `datacompleteness` flag (LPL kept!); drop-and-report for
@@ -81,16 +87,35 @@ graph TD
       as designed); Aatrox winrate cross-check DB vs CSV consistent (deltas ⊂ the 507 excluded games)
 
 **0.4 Enrich**
-- [ ] Riot Data Dragon → `champion_attributes` (the fixed `v_attr`; `name_to_id` map already built in spike)
-- [ ] Leaguepedia *(scoped per spike verdict)* → `gameInSeries` via cheap skeleton tier, matched on
-      champion-set key; cached background script with backoff, run off-peak
+- [x] Riot Data Dragon → `champion_attributes`: 173 rows from pinned 16.14.1 snapshot,
+      `ingest_ddragon.py` with **INSERT BY NAME** (kills positional-order fragility; name mismatches
+      crash loudly). Schema's 20 stat columns verified = exact set of DD stats keys, uniform across champs
+- [x] Leaguepedia *(scoped per spike verdict)*: `lp_common.py` (bot-password login + shared backoff —
+      anonymous calls were the rate-limit cause), `list_lp_tournaments.py` (generate-then-curate seed),
+      `fetch_leaguepedia.py` (raw-Cargo lookup — wrapper can't see Asia Pacific region; cache-first,
+      resumable). Seed: 38 tournaments = 5 major leagues (LCK/LPL/LEC/LTA/LCP) + FST/MSI/Worlds,
+      **~2,522 games cached in one clean authenticated run**
 - [x] gol.gg spot-check: pick/ban column order verified against a real draft (done during 0.2)
 
 **0.4b Series & fearless** *(needed for Phase 5 — set it up now while in the data)*
-- [ ] Reconstruct series: populate `series` + `games.series_id` / `game_in_series` (Leaguepedia is cleanest)
-- [ ] Build `fearless_config` lookup by hand (event + date → none/soft/hard) from the adoption timeline
-- [ ] Derive helper: per (series, game) → fearless-unavailable set (both-teams for hard, same-team for soft)
-- [ ] **Count fearless series per patch** → record: `____` (tells you if Phase 5 has enough data)
+- [x] Reconstruct series: `match_leaguepedia.py` — champion-set key **held at scale: 2,520/2,522
+      matched, 36/38 tournaments at 100%** (2 misses in LEC Summer Playoffs, parked). Series boundary =
+      gameInSeries resetting to 1 within time-sorted tournament; `best_of = 2×(winner's wins)−1`
+      (underivable → drop-and-report). Matcher is **pure compute → data/derived/lp_series_matches.csv**;
+      series applied by `ingest_oracle.py` at insert time (DuckDB can't UPDATE FK-referenced rows).
+      **1,018 series** in DB; run order on fresh clone: ingest → match → ingest (README'd)
+- [x] Build `fearless_config`: **classified empirically, not from announcements** — pick-repeat query
+      over 1,000+ multi-game series shows **ALL 2025 major tournaments ran hard fearless all year**
+      (0 repeats; single LCP Kickoff anomaly parked). Seed-CSV-fed (`data/seeds/fearless_config.csv`,
+      38 rows, all `hard`), ingested by `ingest_oracle.py` — rebuild-proof as required
+- [x] Derive helper: **deferred to `dataset.py` by design** — the fearless-unavailable set is a
+      training-time computation over (series_id, game_in_series, fearless_config), not a stored fact
+- [x] **Count fearless series per patch** → record: **840 hard-fearless multi-game series** across
+      15.01–15.20 (typical 20–99/patch, peaks 15.09/15.15; thin: 15.04–15.05, 15.18, tail).
+      **Strategic consequence (spec §3.8 sharpened): 2025 data is ENTIRELY fearless** →
+      "non-fearless training data" = game-1-of-series + Bo1 states (undepleted pools); depleted
+      states (games 2+) are the eval. Cleaner than cross-tournament splits (same meta/teams, only
+      availability differs). 2024 ingest = future option for literally-non-fearless training
 
 **0.5 Dataset & splits**
 - [ ] `dataset.py`: emit a draft *state* sample (picks/bans so far, turn, side, patch, players)
@@ -234,3 +259,14 @@ graph TD
 - Minor-league ID-less games skipped at ingest (~480 games, 62 name-only teams, LJL-dominated;
   plus ~26 order-less games): rescuable via name-minted teams if per-patch N ever gets desperate.
   Decision: cleaner N over more N — majors all have pristine IDs.
+- 2 unmatched games in LEC 2025 Summer Playoffs (2,520/2,522) — likely date-boundary or
+  duplicate-champion-key filter; investigate if series data there ever looks off.
+- LCP 2025 Season Kickoff: 1 series with a same-team champion repeat inside an otherwise-hard
+  tournament (remake/forfeit/data quirk) — investigate if Phase 5 stumbles on it.
+- Retrofit `INSERT BY NAME` into ingest_oracle.py's remaining positional inserts (games, draft_actions).
+- Dev environment: project lives inside Google Drive sync → file-lock collisions with lol.duckdb on
+  rebuild. Excluded/paused for now; consider moving repo to a non-synced path (e.g. C:\dev\).
+- `build_db.py` orchestrator (ingest_oracle → match_leaguepedia → ingest_oracle → ingest_ddragon)
+  once the script count grows again; currently README documents the order.
+- 2024 OE CSV ingest: adds soft-fearless LPL + literally-non-fearless training data (multi-year
+  was always the plan; wipe-and-rebuild makes it additive).
