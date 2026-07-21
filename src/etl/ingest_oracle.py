@@ -45,7 +45,8 @@ def apply_schema(con: duckdb.DuckDBPyConnection) -> None:
 def wipe(con: duckdb.DuckDBPyConnection) -> None:
     """Wipe (reverse dependency order) ONLY the tables this script rebuilds.
     Never touch hand-built tables (fearless_config) or other scripts' tables."""
-    for table in ["draft_actions", "games", "team_aliases", "players", "teams", "champions"]:
+    for table in ["draft_actions", "games", "series", "team_aliases",
+                  "players", "teams", "champion_attributes", "champions"]:
         con.execute(f"DELETE FROM {table}")
 
 # --- Stages ---
@@ -170,6 +171,15 @@ def ingest_games(
         "series_id": None,
         "game_in_series": None,
     })
+
+    matches = load_series_matches()
+    if matches is not None:
+        df_series, matches = build_series(df_games, matches)
+        con.execute("INSERT INTO series BY NAME SELECT * FROM df_series")
+        df_games = df_games.drop(columns=["series_id", "game_in_series"]).merge(
+            matches[["game_id", "series_id", "game_in_series"]], on="game_id", how="left")
+        print(f"series: {len(df_series)} rows")
+
     con.execute("INSERT INTO games SELECT * FROM df_games")
     n = con.execute("SELECT COUNT(*) FROM games").fetchone()[0]
     print(f"games: {n} rows")
@@ -255,6 +265,42 @@ def build_draft_actions(
         "role": actions["role"],
     })
     return df_actions, orphans
+
+def load_series_matches() -> pd.DataFrame | None:
+    path = DATA_DIR / "derived" / "lp_series_matches.csv"
+    if not path.exists():
+        print("no series-matches file — series info left NULL "
+              "(run match_leaguepedia.py, then re-run this ingest)")
+        return None
+    return pd.read_csv(path, dtype={"series_id": "string"})
+
+
+def build_series(df_games: pd.DataFrame, matches: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Derive series facts from matched games. Returns (df_series, kept_matches)."""
+    m = matches.merge(
+        df_games.drop(columns=["series_id", "game_in_series"]), on="game_id"
+    )
+    m["winner_id"] = m["blue_team_id"].where(m["blue_team_won"], m["red_team_id"])
+
+    def summarize(s: pd.DataFrame) -> pd.Series:
+        best_of = 2 * int(s.groupby("winner_id").size().max()) - 1
+        return pd.Series({
+            "best_of": best_of if best_of in (1, 3, 5) else None,
+            "team1_id": s["blue_team_id"].iloc[0],
+            "team2_id": s["red_team_id"].iloc[0],
+            "event": s["event"].iloc[0],
+            "date": s["date"].min(),
+        })
+
+    df_series = (m.groupby("series_id").apply(summarize, include_groups=False)
+                   .reset_index())
+    bad = df_series[df_series["best_of"].isna()]
+    if len(bad):
+        print(f"skipping {len(bad)} series with underivable best_of (forfeit/incomplete)")
+        df_series = df_series[df_series["best_of"].notna()]
+        matches = matches[matches["series_id"].isin(df_series["series_id"])]
+    return df_series, matches
+
 
 
 
