@@ -43,7 +43,8 @@ graph TD
 - [x] Create repo `lol-draft`, `git init`, Python env (uv or conda)
 - [x] **Register Riot personal API key** (instant; needed as soloQ-meta fallback long before Phase 7 —
       the *production* key application is separate and slow, file it when Phase 7 approaches)
-- [x] Install: `polars`, `duckdb`, `requests`, `torch`, `torch-geometric` (PyG later is fine)
+- [x] Install: `polars`, `duckdb`, `requests`, `torch` (CUDA build, cu130) — `torch-geometric` deferred to Phase 3
+      (PyG wheels pin to an exact torch+CUDA pair; install it against the torch that exists then)
 - [x] Lay down the folder skeleton from `PROJECT_SPEC.md` §5
 - [ ] (defer) Hydra + Weights & Biases — add when training starts in Phase 1
 
